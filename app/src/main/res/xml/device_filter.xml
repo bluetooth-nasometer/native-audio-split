@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 
+        This is a generic USB audio device filter
+        You may need to update the vendor and product IDs for the specific DJI Mic 2 
+        if you have that information
+    -->
+    <usb-device class="1" subclass="1" /> <!-- Audio device class -->
+</resources>
