@@ -329,6 +329,8 @@ public class MainActivity extends AppCompatActivity {
                             "Right channel: " + rightChannelFile.getAbsolutePath();
                     tvRecordingInfo.setText(info);
                     Toast.makeText(MainActivity.this, "Audio split complete", Toast.LENGTH_SHORT).show();
+                    // Call nasalance analysis after UI update
+                    analyzeNasalance(leftChannelFile, rightChannelFile);
                 });
 
             } catch (IOException e) {
@@ -341,6 +343,93 @@ public class MainActivity extends AppCompatActivity {
                 });
             }
         }).start();
+    }
+
+    // Analyze nasalance from left and right PCM files
+    private void analyzeNasalance(File leftFile, File rightFile) {
+        runOnUiThread(() -> tvStatus.setText("Status: Analyzing nasalance..."));
+
+        new Thread(() -> {
+            try {
+                int totalFrames = 0;
+                double sumNasalance = 0;
+
+                FileInputStream leftStream = new FileInputStream(leftFile);
+                FileInputStream rightStream = new FileInputStream(rightFile);
+                byte[] leftBuffer = new byte[2];
+                byte[] rightBuffer = new byte[2];
+
+                while (leftStream.read(leftBuffer) != -1 && rightStream.read(rightBuffer) != -1) {
+                    short leftSample = (short)((leftBuffer[1] << 8) | (leftBuffer[0] & 0xFF));
+                    short rightSample = (short)((rightBuffer[1] << 8) | (rightBuffer[0] & 0xFF));
+
+                    double nasalEnergy = Math.abs(rightSample);
+                    double totalEnergy = Math.abs(leftSample) + nasalEnergy;
+
+                    if (totalEnergy > 0) {
+                        double nasalance = (nasalEnergy / totalEnergy) * 100.0;
+                        sumNasalance += nasalance;
+                        totalFrames++;
+                    }
+                }
+
+                leftStream.close();
+                rightStream.close();
+
+                final double averageNasalance = totalFrames > 0 ? sumNasalance / totalFrames : 0.0;
+
+                // Compute SPL stats for both channels
+                double[] leftSplStats = computeSPLStats(leftFile);
+                double[] rightSplStats = computeSPLStats(rightFile);
+
+                final double finalNasalance = averageNasalance;
+                final String splStats = String.format(Locale.US,
+                        "ORAL CHANNEL (LEFT):\n" +
+                        "Mean SPL: %.1f dB\nMax SPL: %.1f dB\nMin SPL: %.1f dB\n\n" +
+                        "NASAL CHANNEL (RIGHT):\n" +
+                        "Mean SPL: %.1f dB\nMax SPL: %.1f dB\nMin SPL: %.1f dB\n\n" +
+                        "NASALANCE SCORE: %.1f%%",
+                        leftSplStats[0], leftSplStats[1], leftSplStats[2],
+                        rightSplStats[0], rightSplStats[1], rightSplStats[2],
+                        finalNasalance);
+
+                runOnUiThread(() -> {
+                    tvStatus.setText("Status: Analysis complete");
+                    tvRecordingInfo.setText(tvRecordingInfo.getText().toString() + "\n\n" + splStats);
+                    Toast.makeText(MainActivity.this, "Nasalance: " + String.format(Locale.US, "%.1f%%", finalNasalance), Toast.LENGTH_SHORT).show();
+                });
+
+            } catch (IOException e) {
+                Log.e(TAG, "Error analyzing nasalance", e);
+                runOnUiThread(() -> {
+                    tvStatus.setText("Status: Error analyzing nasalance");
+                    Toast.makeText(MainActivity.this, "Failed to analyze nasalance: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                });
+            }
+        }).start();
+    }
+
+    // Helper to compute SPL stats (mean, max, min) for a PCM file
+    private double[] computeSPLStats(File pcmFile) throws IOException {
+        FileInputStream fis = new FileInputStream(pcmFile);
+        List<Double> splValues = new ArrayList<>();
+        byte[] buffer = new byte[2];
+        double refPressure = 20e-6;
+
+        while (fis.read(buffer) != -1) {
+            short sample = (short)((buffer[1] << 8) | (buffer[0] & 0xFF));
+            double rms = Math.abs(sample); // For now use peak-like rms
+            if (rms > 0) {
+                double spl = 20 * Math.log10(rms / refPressure);
+                splValues.add(spl);
+            }
+        }
+        fis.close();
+
+        double mean = splValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+        double max = splValues.stream().mapToDouble(Double::doubleValue).max().orElse(0.0);
+        double min = splValues.stream().mapToDouble(Double::doubleValue).min().orElse(0.0);
+        return new double[]{mean, max, min};
     }
 
     private void playAudioFile(File file) {
